@@ -1,0 +1,19 @@
+# 忽略所有文件
+*
+
+# 但保留Python文件
+!*.py
+
+# 保留目录结构（允许目录被追踪）
+!*/
+
+# 保留.gitignore文件本身
+!.gitignore
+
+# 保留README文件（如果有的话）
+!README.md
+!readme.md
+!README.txt
+
+# 特殊情况：如果有Python包的__init__.py文件在子目录中
+!**/*.py
