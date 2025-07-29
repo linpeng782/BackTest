@@ -28,8 +28,16 @@ def run_multi_scenario_backtest(portfolio_weights, bars_df, benchmark_index):
             "buy_timing": "close",
             "name": "收盘价卖出-收盘价买入",
         },
-        {"sell_timing": "open", "buy_timing": "close", "name": "开盘价卖出-收盘价买入"},
-        {"sell_timing": "open", "buy_timing": "open", "name": "开盘价卖出-开盘价买入"},
+        {
+            "sell_timing": "open",
+            "buy_timing": "close",
+            "name": "开盘价卖出-收盘价买入",
+        },
+        {
+            "sell_timing": "open",
+            "buy_timing": "open",
+            "name": "开盘价卖出-开盘价买入",
+        },
     ]
 
     # 存储所有结果
