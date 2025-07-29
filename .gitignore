@@ -11,8 +11,7 @@
 !.gitignore
 
 # 保留README文件（如果有的话）
-!README.md
-!readme.md
+!*.md
 !README.txt
 
 # 特殊情况：如果有Python包的__init__.py文件在子目录中
