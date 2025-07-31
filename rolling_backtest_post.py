@@ -181,7 +181,6 @@ def rolling_backtest(
     stamp_tax_rate=0.0005,
     transfer_fee_rate=0.0001,
     commission_rate=0.0002,
-    min_transaction_fee=5,
     cash_annual_yield=0.02,
     sell_timing="open",
     buy_timing="open",
@@ -196,7 +195,6 @@ def rolling_backtest(
     :param stamp_tax_rate: 印花税率 -> float
     :param transfer_fee_rate: 过户费率 -> float
     :param commission_rate: 佣金率 -> float
-    :param min_transaction_fee: 最低交易手续费 -> float
     :param cash_annual_yield: 现金年化收益率 -> float
     :param sell_timing: 卖出时点 -> str ('默认open开盘价')
     :param buy_timing: 买入时点 -> str ('默认open开盘价')
@@ -225,13 +223,6 @@ def rolling_backtest(
     sell_prices = get_stock_bars(bars_df, portfolio_weights, "post", sell_timing)
     # 获取买入价格数据
     buy_prices = get_stock_bars(bars_df, portfolio_weights, "post", buy_timing)
-    # 获取所有股票的后复权价格数据（用于复权调整）
-    post_adj_prices = get_stock_bars(bars_df, portfolio_weights, "post", buy_timing)
-    # 获取每只股票的最小交易单位（通常为100股）
-    min_trade_units = pd.Series(
-        dict([(stock, 100) for stock in portfolio_weights.columns.tolist()])
-    )
-
     # 获取每月第一个交易日
     start_date = portfolio_weights.index.min()
     end_date = portfolio_weights.index.max()
@@ -265,6 +256,11 @@ def rolling_backtest(
 
         # 统一转换为pd.Timestamp类型
         rebalance_date = pd.Timestamp(month_date_raw)
+        
+        # 调试：组合0的第一次调仓（第13个月，portfolio_index=0）
+        # if month_idx == 12 and portfolio_index == 0:
+        #     print(f"调试点：组合0的第一次调仓，日期：{rebalance_date}")
+        #     breakpoint()
 
         # 检查该调仓日期是否在portfolio_weights的索引中
         if rebalance_date not in portfolio_weights.index:
@@ -300,11 +296,11 @@ def rolling_backtest(
                 last_period_records = portfolio_histories[portfolio_index][
                     "total_account_asset"
                 ][-1]
-                available_cash = last_period_records.iloc[-1]  # 最后一天的总资产
+                total_asset_before_rebalance = last_period_records.iloc[-1]  # 最后一天的总资产
             else:
                 # 如果没有历史记录，使用月度资金（理论上不应该发生）
-                available_cash = monthly_capital
-                print(f"警告：未找到历史记录，使用月度资金: {available_cash:.2f}")
+                total_asset_before_rebalance = monthly_capital
+                print(f"警告：未找到历史记录，使用月度资金: {total_asset_before_rebalance:.2f}")
 
             # 重置组合的到期日期（新的N个月周期）
             current_portfolio["expire_date"] = get_expire_date(
@@ -323,113 +319,53 @@ def rolling_backtest(
                 month_idx, holding_months, monthly_first_days
             )
 
-        # =========================== 计算目标持仓 ===========================
-        # 计算目标持仓数量（使用买入价格计算）
-        target_holdings = (
-            current_target_weights
-            * available_cash
-            / (
-                current_buy_prices.loc[target_stocks] * (1 + sell_cost_rate)
-            )  # 使用买入价格和卖出成本率
-            // min_trade_units.loc[target_stocks]
-        ) * min_trade_units.loc[target_stocks]
+        # =========================== 全清仓全持仓逻辑 ===========================
+        # 第一步：如果有持仓，先全部清仓
+        sell_cost = 0.0
+        if len(current_portfolio["holdings"]) > 0:
+            # 计算当前持仓市值
+            current_market_value = (current_portfolio["holdings"] * current_sell_prices).sum()
+            # 计算卖出手续费
+            sell_cost = current_market_value * sell_cost_rate
+            # 清仓后的可用资金 = 总资产 - 卖出手续费
+            available_cash = total_asset_before_rebalance - sell_cost
 
-        # =========================== 计算持仓变动 ===========================
-        # 计算持仓变动量（目标持仓 - 当前持仓）
-        holdings_change_raw = target_holdings.sub(
-            current_portfolio["holdings"], fill_value=0
-        )
+        # 第二步：计算买入手续费并分配现金
+        buy_cost = available_cash * buy_cost_rate
+        investable_cash = available_cash - buy_cost
 
-        # 过滤掉无变动的股票
-        holdings_change_filtered = holdings_change_raw.replace(0, np.nan)
-        trades_to_execute = holdings_change_filtered.dropna()
+        # 第三步：等权分配现金（矩阵运算）
+        if len(target_stocks) > 0:
+            # 使用矩阵运算计算目标持仓（等权分配）
+            target_holdings = (
+                current_target_weights * investable_cash / current_buy_prices.loc[target_stocks]
+            ).round(4)  # 保疙4位小数
 
-        # =========================== 分布执行【卖买】操作 ===========================
-        if len(trades_to_execute) > 0:
-            # 分离买卖交易
-            sell_trades = trades_to_execute[trades_to_execute < 0]  # 负数部分：卖出
-            buy_trades = trades_to_execute[trades_to_execute > 0]  # 正数部分：买入
+            # 计算实际投资金额
+            actual_investment = (target_holdings * current_buy_prices.loc[target_stocks]).sum()
 
-            # 初始化成本变量
-            sell_cost = 0
-            buy_cost = 0
+            # 计算剩余现金
+            remaining_cash = investable_cash - actual_investment
 
-            # =========================== 执行卖出操作 ===========================
-            if len(sell_trades) > 0:
-                print(f"  卖出操作: {len(sell_trades)}只股票")
-                # 使用卖出价格计算卖出成本
-                sell_cost = (
-                    (current_sell_prices * sell_trades)
-                    .apply(
-                        lambda x: calc_transaction_fee(
-                            x, min_transaction_fee, sell_cost_rate, buy_cost_rate
-                        )
-                    )
-                    .sum()
-                )
-                print(f"  卖出手续费: {sell_cost:.2f}元")
-
-            # =========================== 执行买入操作 ===========================
-            if len(buy_trades) > 0:
-                print(f"  买入操作: {len(buy_trades)}只股票")
-                # 使用买入价格计算买入成本
-                buy_cost = (
-                    (current_buy_prices * buy_trades)
-                    .apply(
-                        lambda x: calc_transaction_fee(
-                            x, min_transaction_fee, sell_cost_rate, buy_cost_rate
-                        )
-                    )
-                    .sum()
-                )
-                print(f"  买入手续费: {buy_cost:.2f}元")
-
-            # 总交易成本
-            total_transaction_cost = sell_cost + buy_cost
-            print(f"  总手续费: {total_transaction_cost:.2f}元")
-
-            # 更新持仓
-            current_portfolio["holdings"] = target_holdings
-
-            # 计算实际投资金额（暂时使用买入价格计算总市值）
-            actual_investment = (current_buy_prices * target_holdings).sum()
-
-            # 更新现金余额（保持原有逻辑）
-            current_portfolio["cash"] = (
-                available_cash - actual_investment - total_transaction_cost
-            )
         else:
-            # 无交易，只更新现金（可能有利息）
-            if current_portfolio["is_active"]:
-                current_portfolio["cash"] *= 1 + daily_cash_yield
+            target_holdings = pd.Series(dtype=float)
+            remaining_cash = investable_cash
 
-        # =========================== 价格复权调整 ===========================
+        # 更新组合信息
+        current_portfolio["holdings"] = target_holdings
+        current_portfolio["cash"] = remaining_cash
 
+        # 计算持仓市值
         start_date = rebalance_date
         end_date = current_portfolio["expire_date"]
-        # 计算从建仓日到到期日的价格复权比率，复权比率 = 期间价格 / 起始价格
-        price_adjustment_ratio = (
-            post_adj_prices.loc[start_date:end_date] / post_adj_prices.loc[start_date:end_date]
-        )
-        
-
-        # 将复权比率应用到建仓日买入价格，得到期间调整后价格
-        # 使用买入价格作为复权调整的基准价格
-        period_adjusted_prices = (
-            price_adjustment_ratio.T.mul(  # 转置以便于计算
-                current_buy_prices, axis=0
-            )  # 乘以建仓日买入价格
-            .dropna(how="all")
-            .T
-        )  # 删除全为NaN的行并转置回来
-
-        # =========================== 计算投资组合市值 ===========================
-        # 投资组合市值 = 每只股票的(调整后价格 * 持仓数量)的总和
-        portfolio_market_value = (
-            period_adjusted_prices * current_portfolio["holdings"]
-        ).sum(
-            axis=1
-        )  # 按日计算投资组合市值
+        # 只获取持仓股票的价格数据
+        held_stocks = target_holdings.index.tolist()
+        period_post_prices = buy_prices.loc[start_date:end_date, held_stocks]
+        # 计算每日持仓市值：DataFrame(价格) * Series(持仓数量)
+        # Pandas会自动按列索引(股票代码)对齐进行广播运算
+        # 结果：每日每只股票市值 = 当日价格 × 持仓数量
+        # sum(axis=1)：按行求和，得到每日总持仓市值
+        portfolio_market_value = (period_post_prices * target_holdings).sum(axis=1)
 
         # =========================== 计算现金账户余额 ===========================
         # 计算期间现金账户的复利增长（按日计息）

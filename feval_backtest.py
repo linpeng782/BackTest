@@ -12,6 +12,7 @@ from rolling_backtest_post import (
 )
 
 
+
 def run_multi_scenario_backtest(
     portfolio_weights, bars_df, benchmark_index, scenarios="open_open"
 ):
@@ -155,5 +156,5 @@ if __name__ == "__main__":
     # scenarios="open_open"  - 只测试开盘价卖出-开盘价买入（默认）
     # scenarios="all"       - 测试所有三种场景
     best_result, comparison_df = run_multi_scenario_backtest(
-        portfolio_weights, bars_df, index_item
+        portfolio_weights, bars_df, index_item, scenarios="all"
     )
