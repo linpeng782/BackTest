@@ -118,17 +118,8 @@ def get_stock_bars(stock_price_data, portfolio_weights, adjust, price_type):
     # 计算时间范围：开始日期，结束日期
     start_date = portfolio_weights.index.min()
     end_date = portfolio_weights.index.max()
-
-    print(f"筛选时间范围: {start_date} 到 {end_date}")
-
     # 获取股票列表
     stock_list = portfolio_weights.columns.tolist()
-    print(f"股票数量: {len(stock_list)}")
-
-    # 获取stock_price_data中所有的股票代码并去重
-    stock_book = stock_price_data.index.get_level_values("order_book_id").unique()
-    print(f"stock_price_data中的股票数量: {len(stock_book)}")
-
     # 按时间范围和股票列表筛选数据
     filtered_data = stock_price_data.loc[
         (stock_price_data.index.get_level_values("order_book_id").isin(stock_list))
@@ -136,19 +127,21 @@ def get_stock_bars(stock_price_data, portfolio_weights, adjust, price_type):
         & (stock_price_data.index.get_level_values("datetime") <= end_date)
     ]
 
-    print(f"筛选后数据形状: {filtered_data.shape}")
-
     # 根据价格类型和复权类型返回相应的价格数据
+    # 返回开盘价
     if price_type == "open":
-        # 返回开盘价
+        # 返回后复权开盘价
         if adjust == "post":
             return filtered_data["开盘价"].unstack("order_book_id")
+        # 返回未复权开盘价
         else:
             return filtered_data["未复权开盘价"].unstack("order_book_id")
+    # 返回收盘价
     elif price_type == "close":
-        # 返回收盘价
+        # 返回后复权收盘价
         if adjust == "post":
             return filtered_data["收盘价"].unstack("order_book_id")
+        # 返回未复权收盘价
         else:
             return filtered_data["未复权收盘价"].unstack("order_book_id")
     else:
@@ -227,18 +220,13 @@ def rolling_backtest(
         columns=["total_account_asset", "holding_market_cap", "cash_account"],
     )
 
-    # 根据交易时点参数获取相应的价格数据
-    print(f"获取卖出价格数据（{sell_timing}，未复权）")
-    sell_prices = get_stock_bars(bars_df, portfolio_weights, "none", sell_timing)
-
-    print(f"获取买入价格数据（{buy_timing}，未复权）")
-    buy_prices = get_stock_bars(bars_df, portfolio_weights, "none", buy_timing)
-
+    # 根据实际交易时点参数获取相应的价格数据
+    # 获取卖出价格数据
+    sell_prices = get_stock_bars(bars_df, portfolio_weights, "post", sell_timing)
+    # 获取买入价格数据
+    buy_prices = get_stock_bars(bars_df, portfolio_weights, "post", buy_timing)
     # 获取所有股票的后复权价格数据（用于复权调整）
-    print("获取所有股票的后复权价格数据")
-    post_adj_prices = get_stock_bars(
-        bars_df, portfolio_weights, "post", buy_timing
-    )  # 复权调整使用买入时点
+    post_adj_prices = get_stock_bars(bars_df, portfolio_weights, "post", buy_timing)
     # 获取每只股票的最小交易单位（通常为100股）
     min_trade_units = pd.Series(
         dict([(stock, 100) for stock in portfolio_weights.columns.tolist()])
@@ -250,11 +238,12 @@ def rolling_backtest(
     monthly_first_days = get_monthly_first_trading_days(start_date, end_date)
 
     # =========================== N个月组合管理 ===========================
-    # 存储N个月组合的信息
+    # 初始化N个月组合的信息和历史记录
     monthly_portfolios = {}
+    portfolio_histories = {}
 
-    # 初始化N个空组合
     for i in range(holding_months):
+        # 初始化组合信息
         monthly_portfolios[i] = {
             "holdings": pd.Series(dtype=float),  # 持仓股票及数量
             "cash": 0.0,  # 现金余额
@@ -262,11 +251,7 @@ def rolling_backtest(
             "expire_date": None,  # 到期日期
             "is_active": False,  # 是否激活
         }
-
-    # =========================== 初始化组合历史记录存储 ===========================
-    # 为每个组合初始化空的历史记录列表
-    portfolio_histories = {}
-    for i in range(holding_months):
+        # 初始化历史记录
         portfolio_histories[i] = {
             "total_account_asset": [],
             "holding_market_cap": [],
@@ -289,10 +274,8 @@ def rolling_backtest(
         current_target_weights = portfolio_weights.loc[rebalance_date].dropna()
         if len(current_target_weights) == 0:
             continue
-
         # 获取当前调仓日的目标股票
         target_stocks = current_target_weights.index.tolist()
-
         # 获取当前调仓日的卖出和买入价格
         current_sell_prices = sell_prices.loc[rebalance_date]
         current_buy_prices = buy_prices.loc[rebalance_date]
@@ -421,12 +404,14 @@ def rolling_backtest(
                 current_portfolio["cash"] *= 1 + daily_cash_yield
 
         # =========================== 价格复权调整 ===========================
-        # 计算从建仓日到到期日的价格复权比率
+
         start_date = rebalance_date
         end_date = current_portfolio["expire_date"]
+        # 计算从建仓日到到期日的价格复权比率，复权比率 = 期间价格 / 起始价格
         price_adjustment_ratio = (
-            post_adj_prices.loc[start_date:end_date] / post_adj_prices.loc[start_date]
-        )  # 复权比率 = 期间价格 / 起始价格
+            post_adj_prices.loc[start_date:end_date] / post_adj_prices.loc[start_date:end_date]
+        )
+        
 
         # 将复权比率应用到建仓日买入价格，得到期间调整后价格
         # 使用买入价格作为复权调整的基准价格

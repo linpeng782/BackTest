@@ -12,7 +12,9 @@ from rolling_backtest_post import (
 )
 
 
-def run_multi_scenario_backtest(portfolio_weights, bars_df, benchmark_index):
+def run_multi_scenario_backtest(
+    portfolio_weights, bars_df, benchmark_index, scenarios="open_open"
+):
     """
     执行多场景回测对比
 
@@ -20,9 +22,13 @@ def run_multi_scenario_backtest(portfolio_weights, bars_df, benchmark_index):
         portfolio_weights: 投资组合权重数据
         bars_df: 股票价格数据
         benchmark_index: 基准指数代码
+        scenarios: 测试场景选择
+            - "open_open": 只测试开盘价卖出-开盘价买入
+            - "all": 测试所有三种场景
+            - list: 自定义场景列表
     """
-    # 定义三组不同的交易时点参数
-    test_scenarios = [
+    # 定义所有可用的交易时点参数
+    all_test_scenarios = [
         {
             "sell_timing": "close",
             "buy_timing": "close",
@@ -40,8 +46,23 @@ def run_multi_scenario_backtest(portfolio_weights, bars_df, benchmark_index):
         },
     ]
 
+    # 根据scenarios参数选择要测试的场景
+    if scenarios == "open_open":
+        # 只测试开盘价卖出-开盘价买入
+        test_scenarios = [all_test_scenarios[2]]  # 第三个场景
+    elif scenarios == "all":
+        # 测试所有场景
+        test_scenarios = all_test_scenarios
+    elif isinstance(scenarios, list):
+        # 自定义场景列表
+        test_scenarios = scenarios
+    else:
+        raise ValueError(f"不支持的scenarios参数: {scenarios}")
+
     # 存储所有结果
     all_results = []
+
+    print(f"\n将执行 {len(test_scenarios)} 个测试场景")
 
     # 逐个执行回测
     for i, scenario in enumerate(test_scenarios, 1):
@@ -130,6 +151,9 @@ if __name__ == "__main__":
     index_item = "000852.XSHG"
 
     # 执行多场景回测对比
+    # 可选参数:
+    # scenarios="open_open"  - 只测试开盘价卖出-开盘价买入（默认）
+    # scenarios="all"       - 测试所有三种场景
     best_result, comparison_df = run_multi_scenario_backtest(
         portfolio_weights, bars_df, index_item
     )
