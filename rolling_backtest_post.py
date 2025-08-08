@@ -218,10 +218,9 @@ def rolling_backtest(
         columns=["total_account_asset", "holding_market_cap", "cash_account"],
     )
 
-    # 根据实际交易时点参数获取相应的价格数据
-    # 获取卖出价格数据
+    # 获取卖出价格数据-后复权
     sell_prices = get_stock_bars(bars_df, portfolio_weights, "post", sell_timing)
-    # 获取买入价格数据
+    # 获取买入价格数据-后复权
     buy_prices = get_stock_bars(bars_df, portfolio_weights, "post", buy_timing)
     # 获取每月第一个交易日
     start_date = portfolio_weights.index.min()
